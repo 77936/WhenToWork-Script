@@ -188,6 +188,7 @@ function Parse-Time-Location {
         $category   = $matches[2]
     } else {
         $cleanShift = $time
+        $category   = "NB"
     }
 
     # Match time patterns like "9:30-4:30", "7am-3pm", "2-9pm", "9:30-4:30pm"
@@ -265,25 +266,99 @@ function Parse-Time-Location {
     return $null
 }
 
-# Done: Helper Function to convert letter to number
-function Convert-ColumnLetterToNumber {
-    param([string]$colLetter)
-
-    $colLetter = $colLetter.ToUpper()
-    $number = 0
-    foreach ($char in $colLetter.ToCharArray()) {
-        $number = $number * 26 + ([int][char]$char - [int][char]'A' + 1)
-    }
-    return $number
-}
-
-# TOFIX: Function to parse through shift cell group
+# Function to parse through shift cell group
 # Param $Worksheet, $StartRow, StartColumn
-# Returns result [PSCustomObject] of shift data
+# Returns $cellsTexts (array of 4 cells)
 function Parse-CellGroup {
-
+    param(
+        [Parameter(Mandatory = $true)]
+        $Worksheet,
+        
+        [Parameter(Mandatory = $true)]
+        [int]$StartRow,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$StartColumn
+    )
+    
+    $cellTexts = @()
+    
+    # Get text from 4 consecutive cells
+    for ($i = 0; $i -lt 4; $i++) {
+        $currentRow = $StartRow + $i
+        $cellAddress = "$StartColumn$currentRow"
+        $cellText = $Worksheet.Cells[$cellAddress].Text.Trim()
+        $cellTexts += $cellText
+    }
+    
+    return $cellTexts
 }
 
+# Function to process shift data from cell group
+# Param $Worksheet, $StartRow, $StartColumn
+# Returns PSCustomObject with shift data
+function Process-ShiftGroup {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Worksheet,
+        
+        [Parameter(Mandatory = $true)]
+        [int]$StartRow,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$StartColumn
+    )
+    
+    # Get the 4 cell texts
+    $cellTexts = Parse-CellGroup -Worksheet $Worksheet -StartRow $StartRow -StartColumn $StartColumn
+    
+    # Initialize result object
+    $result = [PSCustomObject]@{
+        Shift1 = $null
+        Shift2 = $null
+        Description = ""
+        PaidHours = $null
+    }
+    
+    # Process Cell 1 (always check for shift)
+    if (-not [string]::IsNullOrWhiteSpace($cellTexts[0])) {
+        $result.Shift1 = Parse-Time-Location -time $cellTexts[0]
+    }
+    
+    # Process Cell 2
+    if (-not [string]::IsNullOrWhiteSpace($cellTexts[1])) {
+        if ($cellTexts[1] -match '^\d') {
+            # Starts with number - it's a shift
+            $result.Shift2 = Parse-Time-Location -time $cellTexts[1]
+        } else {
+            # Doesn't start with number - it's a description
+            $result.Description = $cellTexts[1]
+            # Skip to cell 4 for paid hours check
+            if (-not [string]::IsNullOrWhiteSpace($cellTexts[3]) -and $cellTexts[3] -match '^\d') {
+                $result.PaidHours = $cellTexts[3]
+            }
+            return $result
+        }
+    }
+    
+    # Process Cell 3 (only if we got here - meaning cell 2 was a shift or empty)
+    if (-not [string]::IsNullOrWhiteSpace($cellTexts[2])) {
+        if ($cellTexts[2] -match '^\d') {
+            # Starts with number - could be a third shift or paid hours
+            # For now, treat as description since you mentioned checking if it doesn't start with number
+        } else {
+            # Doesn't start with number - add to description for both shifts
+            $result.Description = $cellTexts[2]
+        }
+    }
+    
+    # Process Cell 4 (paid hours)
+    if (-not [string]::IsNullOrWhiteSpace($cellTexts[3]) -and $cellTexts[3] -match '^\d') {
+        $result.PaidHours = $cellTexts[3]
+    }
+    
+    return $result
+}
 
 
 
@@ -344,9 +419,134 @@ function Main{
     Close-ExcelPackage $data
 }
 
-# TODO: Tester
-function TestCellGroupParse{
+# Testers
 
+# Tester for Process-ShiftGroup function
+function TestProcessShiftGroup {
+    # Step 1: Check ImportExcel module
+    if (-not (Test-ImportExcelModule)) {
+        return
+    }
+
+    # Step 2: Let user select Excel file
+    $excelFile = Select-ExcelFile
+    if (-not $excelFile) {
+        return
+    }
+
+    # Step 3: Ask for starting position
+    $startColumn = Read-Host "Enter the starting column (e.g., C, D, E)"
+    if (-not $startColumn) {
+        Write-Host "No column entered. Using default 'C'" -ForegroundColor Yellow
+        $startColumn = "C"
+    }
+
+    $startRowInput = Read-Host "Enter the starting row number (e.g., 5)"
+    if (-not $startRowInput) {
+        Write-Host "No row entered. Using default '5'" -ForegroundColor Yellow
+        $startRow = 5
+    } else {
+        $startRow = [int]$startRowInput
+    }
+
+    try {
+        # Step 4: Open Excel and get worksheet
+        $data = Open-ExcelPackage -Path $excelFile
+        $sheet = $data.Workbook.Worksheets[1]  # first sheet
+
+        # Step 5: Process the shift group
+        Write-Host "`nProcessing shift group starting at $startColumn$startRow..." -ForegroundColor Cyan
+        
+        # First show raw cell contents
+        $cellTexts = Parse-CellGroup -Worksheet $sheet -StartRow $startRow -StartColumn $startColumn
+        Write-Host "`n=== Raw Cell Contents ===" -ForegroundColor Yellow
+        for ($i = 0; $i -lt $cellTexts.Count; $i++) {
+            $cellAddress = "$startColumn$($startRow + $i)"
+            Write-Host "$cellAddress : '$($cellTexts[$i])'"
+        }
+        
+        # Then process the shift data
+        $shiftResult = Process-ShiftGroup -Worksheet $sheet -StartRow $startRow -StartColumn $startColumn
+
+        Write-Host "`n=== Processed Shift Data ===" -ForegroundColor Green
+        
+        if ($shiftResult.Shift1) {
+            Write-Host "Shift 1:"
+            Write-Host "  Start: $($shiftResult.Shift1.StartTime)"
+            Write-Host "  End: $($shiftResult.Shift1.EndTime)"
+            Write-Host "  Category: $($shiftResult.Shift1.Category)"
+        } else {
+            Write-Host "Shift 1: None"
+        }
+        
+        if ($shiftResult.Shift2) {
+            Write-Host "Shift 2:"
+            Write-Host "  Start: $($shiftResult.Shift2.StartTime)"
+            Write-Host "  End: $($shiftResult.Shift2.EndTime)"
+            Write-Host "  Category: $($shiftResult.Shift2.Category)"
+        } else {
+            Write-Host "Shift 2: None"
+        }
+        
+        Write-Host "Description: '$($shiftResult.Description)'"
+        Write-Host "Paid Hours: '$($shiftResult.PaidHours)'"
+
+        # Cleanup
+        Close-ExcelPackage $data
+    }
+    catch {
+        Write-Error "Failed to test shift group processing: $_"
+    }
+}
+
+function TestCellGroupParse {
+    # Step 1: Check ImportExcel module
+    if (-not (Test-ImportExcelModule)) {
+        return
+    }
+
+    # Step 2: Let user select Excel file
+    $excelFile = Select-ExcelFile
+    if (-not $excelFile) {
+        return
+    }
+
+    # Step 3: Ask for starting position
+    $startColumn = Read-Host "Enter the starting column (e.g., C, D, E)"
+    if (-not $startColumn) {
+        Write-Host "No column entered. Using default 'C'" -ForegroundColor Yellow
+        $startColumn = "C"
+    }
+
+    $startRowInput = Read-Host "Enter the starting row number (e.g., 5)"
+    if (-not $startRowInput) {
+        Write-Host "No row entered. Using default '5'" -ForegroundColor Yellow
+        $startRow = 5
+    } else {
+        $startRow = [int]$startRowInput
+    }
+
+    try {
+        # Step 4: Open Excel and get worksheet
+        $data = Open-ExcelPackage -Path $excelFile
+        $sheet = $data.Workbook.Worksheets[1]  # first sheet
+
+        # Step 5: Parse the cell group
+        Write-Host "`nGetting cell texts starting at $startColumn$startRow..." -ForegroundColor Cyan
+        $cellTexts = Parse-CellGroup -Worksheet $sheet -StartRow $startRow -StartColumn $startColumn
+
+        Write-Host "`n=== Cell Texts ===" -ForegroundColor Green
+        for ($i = 0; $i -lt $cellTexts.Count; $i++) {
+            $cellAddress = "$startColumn$($startRow + $i)"
+            Write-Host "$cellAddress : '$($cellTexts[$i])'"
+        }
+
+        # Cleanup
+        Close-ExcelPackage $data
+    }
+    catch {
+        Write-Error "Failed to test cell group parsing: $_"
+    }
 }
 
 function TestTimeParse{
@@ -367,7 +567,7 @@ function TestColumnIncrementMain{
     Write-Host "Incremented '$string' to '$result'"
 }
 
-function HashTableCheckMain{
+function TestHashTable{
     # Step 1: Check ImportExcel module
     if (-not (Test-ImportExcelModule)) {
         return
@@ -410,7 +610,7 @@ function HashTableCheckMain{
     Close-ExcelPackage $data
 }
 
-function CellCheckMain {
+function TestCellCheck {
     # Step 1: Check ImportExcel module
     if (-not (Test-ImportExcelModule)) {
         return
@@ -452,7 +652,7 @@ function CellCheckMain {
 
 # To run
 try {
-    TestCellGroupParse
+    TestProcessShiftGroup
 } catch {
     Write-Error "Unexpected error: $($_.Exception.Message)"
 }
