@@ -149,7 +149,66 @@ function ColumnIncrementHelper{
     }
 }
 
-# Done: Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
+# Done: Calculate Paid Hours
+# returns $paidHours
+function PaidHourCalculator{
+    param(
+        [Parameter (Mandatory = $true)]
+        [string]$StartTime,
+
+        [Parameter (Mandatory = $true)]
+        [string]$EndTime
+    )
+
+    try{
+        $start = [DateTime]::Parse($StartTime)
+        $end   = [DateTime]::Parse($EndTime)
+
+        # Prob not used but handles overnight shifts
+        if ($end -le $start){
+            $end = $end.AddDays(1)
+        }
+
+        # Calculate total timespan
+        $timespan = $end - $start
+        $totalHours = $timespan.TotalHours
+        $totalMinutes = $timespan.TotalMinutes
+
+        # Extract whole hours and remaining minutes
+        $wholeHours = [Math]::Floor($totalHours)
+        $remainingMinutes = $totalMinutes % 60
+
+        # Apply minute rounding scale
+        $roundedMinuteHours = switch ($remainingMinutes) {
+            {$_ -ge 1  -and $_ -le 6}   {0.1}
+            {$_ -ge 7  -and $_ -le 12}  {0.2}
+            {$_ -ge 13 -and $_ -le 18}  {0.3}
+            {$_ -ge 19 -and $_ -le 24}  {0.4}
+            {$_ -ge 25 -and $_ -le 30}  {0.5}
+            {$_ -ge 31 -and $_ -le 36}  {0.6}
+            {$_ -ge 37 -and $_ -le 42}  {0.7}
+            {$_ -ge 43 -and $_ -le 48}  {0.8}
+            {$_ -ge 49 -and $_ -le 54}  {0.9}
+            {$_ -ge 55}                 {1.0}
+            default                     {0.0}
+        }
+
+        # Calculate total paid hours before break deduction
+        $paidHours = $wholeHours + $roundedMinuteHours
+
+        # Subtract 30 minute break (0.5 Hours) if shift is over 6 hours
+        if ($paidHours -gt 6){
+            $paidHours -= 0.5
+        }
+
+        return $paidHours
+    } catch{
+        Write-Error "Error parsing time values. Please use format like '9:00am' or '5:30pm'. Error: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
 # Returns StartTime, EndTime, Category
 function Parse-Time-Location {
     param(
@@ -235,10 +294,14 @@ function Parse-Time-Location {
             }
         }
 
+        # Call PaidHoursCalculation
+        $paidHours = PaidHourCalculator -StartTime $startTime -EndTime $endTime
+
         
         return @{
             StartTime = $startTime
             EndTime   = $endTime
+            PaidHours = $paidHours
             Category  = $category
         }
     }
@@ -275,6 +338,7 @@ function Parse-CellGroup {
     return $cellTexts
 }
 
+# Add Biweekly Check
 # Function to process shift data from cell group
 # Param $Worksheet, $StartRow, $StartColumn
 # Returns PSCustomObject with shift data
@@ -298,7 +362,6 @@ function Process-ShiftGroup {
         Shift1 = $null
         Shift2 = $null
         Description = ""
-        PaidHours = $null
     }
     
     # Process Cell 1 (always check for shift)
@@ -314,10 +377,6 @@ function Process-ShiftGroup {
         } else {
             # Doesn't start with number - it's a description
             $result.Description = $cellTexts[1]
-            # Skip to cell 4 for paid hours check
-            if (-not [string]::IsNullOrWhiteSpace($cellTexts[3]) -and $cellTexts[3] -match '^\d') {
-                $result.PaidHours = $cellTexts[3]
-            }
             return $result
         }
     }
@@ -333,8 +392,10 @@ function Process-ShiftGroup {
         }
     }
     
-    # Process Cell 4 (paid hours)
+    Process Cell 4 (paid hours)
     if (-not [string]::IsNullOrWhiteSpace($cellTexts[3]) -and $cellTexts[3] -match '^\d') {
+        
+        # Add Biweekly check
         $result.PaidHours = $cellTexts[3]
     }
     
@@ -537,6 +598,7 @@ function TestTimeParse{
     Write-Host "Start time = '$($result.StartTime)'"
     Write-Host "End time = '$($result.EndTime)'"
     Write-Host "Category = '$($result.Category)'"
+    Write-Host "Paid Hours = '$($result.PaidHours)'"
 }
 
 function TestColumnIncrementMain{
@@ -632,7 +694,7 @@ function TestCellCheck {
 
 # To run
 try {
-    TestProcessShiftGroup
+    TestTimeParse
 } catch {
     Write-Error "Unexpected error: $($_.Exception.Message)"
 }
