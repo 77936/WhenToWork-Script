@@ -131,21 +131,42 @@ function Select-ExcelFile {
     }
 }
 
-# TODO: Helper function for column incremention
-
-# TODO: Function to parse through shift cell group
-function Parse-CellGroup{
+# Helper function for column incremention
+function ColumnIncrementHelper{
     param(
-        [Parameter(Mandatory=$true)]
-        $Worksheet,
-        [Parameter(Mandatory=$true)]
-        [int]$StartRow,
-        [Parameter(Mandatory=$true)]
-        [int]$StartColumn
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern("^[A-Z]$")]
+        [string]$letter
     )
 
-
+    $i = [int][char]$letter
+    if ($i -lt [int][char]'Z'){
+        $nextletter = $i + 1
+        $nextChar = [char]$nextLetter
+        return $nextChar
+    } else {
+        return "A"
+    }
 }
+
+# Helper function for column translation
+function Convert-ColumnLetterToNumber {
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern("^[A-Z]+$")]
+        [string]$ColumnLetter
+    )
+
+    $columnLetter = $ColumnLetter.ToUpper()
+    $columnNumber = 0
+
+    foreach ($char in $columnLetter.ToCharArray()) {
+        $columnNumber = $columnNumber * 26 + ([int][char]$char - [int][char]'A' + 1)
+    }
+
+    return $columnNumber
+}
+
 
 # Done: Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
 # Returns StartTime, EndTime, Category
@@ -157,80 +178,113 @@ function Parse-Time-Location {
     $category = $null
     
     # Return null for empty, or letters with no shift time, ex. OFF
-    if ([string]::IsNullOrWhiteSpace($shift) -or $shift -match "[a-zA-Z]") {
+    if ([string]::IsNullOrWhiteSpace($time) -or $time -match "^[a-zA-Z]+$") {
         return $null
     }
     
-    # Handles formats like "7:30-4 NB", "2-8:30 TCP", "9:00-5:30 ABC" and splits into shift time range & location code
-    if ($time -match '^([\d:]+\-[\d:]+)\s+(.+)$') {
+    # Split time & category if present
+    if ($time -match '^(.+?)\s+([A-Za-z]+)$') {
         $cleanShift = $matches[1]
-        $category = $matches[2]
-    } else{
+        $category   = $matches[2]
+    } else {
         $cleanShift = $time
     }
 
-    # Match time patterns like "9:30-4:30", "7am-3pm", "2-9pm", etc.
-    $timePattern = '(\d{1,2}:?\d{0,2})\s*(?:am|pm)?\s*-\s*(\d{1,2}:?\d{0,2})\s*(am|pm)?'
+    # Match time patterns like "9:30-4:30", "7am-3pm", "2-9pm", "9:30-4:30pm"
+    $timePattern = '(\d{1,2}:?\d{0,2}\s*(?:am|pm)?)\s*-\s*(\d{1,2}:?\d{0,2})\s*(am|pm)?'
     
     if ($cleanShift -match $timePattern) {
         $startTime = $matches[1]
-        $endTime = $matches[2]
+        $endTime   = $matches[2]
         $endPeriod = $matches[3]
         
         # Add missing colons for times without minutes
-        if ($startTime -notmatch ':') {
-            $startTime = $startTime + ':00'
-        }
-        if ($endTime -notmatch ':') {
-            $endTime = $endTime + ':00'
-        }
+        if ($startTime -notmatch ':') { $startTime += ':00' }
+        if ($endTime -notmatch ':')   { $endTime   += ':00' }
         
         # Handle AM/PM logic
         if ($endPeriod) {
             $endTime = $endTime + $endPeriod.ToLower()
             
-            # If end time is PM and start time doesn't have AM/PM, assume start is AM
             if ($endPeriod.ToLower() -eq 'pm' -and $cleanShift -notmatch 'am' -and $startTime -notmatch 'am|pm') {
-                # For early morning hours (6-11), assume AM
                 $startHour = [int]($startTime -split ':')[0]
                 if ($startHour -ge 6 -and $startHour -le 11) {
-                    $startTime = $startTime + 'am'
+                    $startTime += 'am'
                 } else {
-                    # For afternoon hours or when ambiguous, keep as is and let context decide
-                    $startTime = $startTime + 'pm'
+                    $startTime += 'pm'
                 }
             }
         } else {
-            # No AM/PM specified, make educated guesses
+            # No AM/PM specified — educated guess
             $startHour = [int]($startTime -split ':')[0]
-            $endHour = [int]($endTime -split ':')[0]
-            
-            # Early hours (6-11) are likely AM
+            $endHour   = [int]($endTime -split ':')[0]
+
+            # Decide AM/PM for start
             if ($startHour -ge 6 -and $startHour -le 11) {
-                $startTime = $startTime + 'am'
+                $startTime += 'am'
+            } else {
+                $startTime += 'pm'
             }
-            
-            # If end hour is less than start hour, end is likely next period
-            if ($endHour -le 12 -and $endHour -lt $startHour) {
-                $endTime = $endTime + 'pm'
-            } elseif ($endHour -ge 13) {
-                # 24-hour format converted
-                $endTime = ($endHour - 12).ToString() + ':' + ($endTime -split ':')[1] + 'pm'
+
+            $startPeriod = $startTime.Substring($startTime.Length - 2)
+
+            # Decide AM/PM for end
+            if ($endHour -lt $startHour) {
+                if ($startHour -eq 12 -and $startPeriod -eq 'pm') {
+                    # Special case: noon shift, later end hour is still PM
+                    $endTime += 'pm'
+                }
+                elseif ($startPeriod -eq 'am') {
+                    $endTime += 'pm'
+                } else {
+                    $endTime += 'am'
+                }
+            }
+            elseif ($endHour -eq 12) {
+                # Special noon/midnight handling
+                if ($startPeriod -eq 'am') {
+                    $endTime += 'pm'  # noon
+                } else {
+                    $endTime += 'am'  # midnight
+                }
+            }
+            else {
+                $endTime += $startPeriod
             }
         }
+
         
         return @{
             StartTime = $startTime
-            EndTime = $endTime
-            Category = $category
-
+            EndTime   = $endTime
+            Category  = $category
         }
     }
     
-    # If no pattern matches, return null
-    Write-Warning "Could not parse shift: '$shift'"
+    Write-Warning "Could not parse shift: '$time'"
     return $null
 }
+
+
+function Convert-ColumnLetterToNumber {
+    param([string]$colLetter)
+
+    $colLetter = $colLetter.ToUpper()
+    $number = 0
+    foreach ($char in $colLetter.ToCharArray()) {
+        $number = $number * 26 + ([int][char]$char - [int][char]'A' + 1)
+    }
+    return $number
+}
+
+# TOFIX: Function to parse through shift cell group
+# Param $Worksheet, $StartRow, StartColumn
+# Returns result [PSCustomObject] of shift data
+function Parse-CellGroup {
+
+}
+
+
 
 
 
@@ -253,8 +307,8 @@ function Main{
     $sheet = $data.Workbook.Worksheets[1] # first sheet
 
     # Check if namess are in the Worker Hashtable
-    $startingColumn = "A"
-    $startingRow = 5
+    $startingNameColumn = "A"
+    $startingNameRow = 5
     $offset = 4
 
     $name = ""
@@ -272,6 +326,8 @@ function Main{
 
         # TODO: Add Shift Parsing Here
 
+
+
         $startingRow += $offset
     } elseif([string]::IsNullOrWhiteSpace($cellValue)){
         # Breaks when blank and done with names
@@ -288,11 +344,25 @@ function Main{
     Close-ExcelPackage $data
 }
 
-# TODO: to test column increment
+
+function TestTimeParse{
+    $time = Read-Host "Input a time to parse"
+
+    $result = Parse-Time-Location -time $time
+
+    Write-Host "Start time = '$($result.StartTime)'"
+    Write-Host "End time = '$($result.EndTime)'"
+    Write-Host "Category = '$($result.Category)'"
+}
+
+function TestCellGroupParse{
+
+}
+
 function TestColumnIncrementMain{
     $string = Read-Host "Input a letter to increment"
 
-    $result = Increment-SingleLetter -input $string
+    $result = ColumnIncrementHelper -letter $string
 
     Write-Host "Incremented '$string' to '$result'"
 }
@@ -382,7 +452,7 @@ function CellCheckMain {
 
 # To run
 try {
-    Main
+    TestCellGroupParse
 } catch {
     Write-Error "Unexpected error: $($_.Exception.Message)"
 }
