@@ -149,25 +149,6 @@ function ColumnIncrementHelper{
     }
 }
 
-# Done: Helper function for column translation
-function Convert-ColumnLetterToNumber {
-    param (
-        [Parameter(Mandatory = $true)]
-        [ValidatePattern("^[A-Z]+$")]
-        [string]$ColumnLetter
-    )
-
-    $columnLetter = $ColumnLetter.ToUpper()
-    $columnNumber = 0
-
-    foreach ($char in $columnLetter.ToCharArray()) {
-        $columnNumber = $columnNumber * 26 + ([int][char]$char - [int][char]'A' + 1)
-    }
-
-    return $columnNumber
-}
-
-
 # Done: Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
 # Returns StartTime, EndTime, Category
 function Parse-Time-Location {
@@ -421,7 +402,6 @@ function Main{
 
 # Testers
 
-# Tester for Process-ShiftGroup function
 function TestProcessShiftGroup {
     # Step 1: Check ImportExcel module
     if (-not (Test-ImportExcelModule)) {
