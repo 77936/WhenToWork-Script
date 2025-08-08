@@ -1,4 +1,4 @@
-﻿#Employee Hashtable Biweekly Names -> WhenToWork Names + Positions
+﻿# Employee Hashtable Biweekly Names -> WhenToWork Names + Positions
 $WorkerTable = @{
    "Nicole Shaw" = [PSCustomObject]@{
         Name = "Nicole Shaw"
