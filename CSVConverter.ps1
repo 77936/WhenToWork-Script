@@ -1,4 +1,4 @@
-﻿# Employee Hashtable Biweekly Names -> WhenToWork Names + Positions
+﻿# Done: Employee Hashtable Biweekly Names -> WhenToWork Names + Positions
 $WorkerTable = @{
    "Nicole Shaw" = [PSCustomObject]@{
         Name = "Nicole Shaw"
@@ -86,7 +86,7 @@ $WorkerTable = @{
     }
 }
 
-# Check if ImportExcel module is available
+# Done: Check if ImportExcel module is available
 function Test-ImportExcelModule {
     if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
         Write-Host "ImportExcel module not found. Installing..." -ForegroundColor Yellow
@@ -104,7 +104,7 @@ function Test-ImportExcelModule {
     return $true
 }
 
-# Function to open file dialog and select Excel file
+# Done: Function to open file dialog and select Excel file
 function Select-ExcelFile {
     param(
         [string]$Title = "Select Excel File",
@@ -131,9 +131,25 @@ function Select-ExcelFile {
     }
 }
 
-# Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
+# TODO: Helper function for column incremention
+
+# TODO: Function to parse through shift cell group
+function Parse-CellGroup{
+    param(
+        [Parameter(Mandatory=$true)]
+        $Worksheet,
+        [Parameter(Mandatory=$true)]
+        [int]$StartRow,
+        [Parameter(Mandatory=$true)]
+        [int]$StartColumn
+    )
+
+
+}
+
+# Done: Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
 # Returns StartTime, EndTime, Category
-function Parse-TimeShift {
+function Parse-Time-Location {
     param(
         [string]$time
     )
@@ -216,6 +232,9 @@ function Parse-TimeShift {
     return $null
 }
 
+
+
+
 # Main function & Tester Main Functions
 function Main{
     # Step 1: Check ImportExcel module
@@ -234,10 +253,12 @@ function Main{
     $sheet = $data.Workbook.Worksheets[1] # first sheet
 
     # Check if namess are in the Worker Hashtable
-    $name = ""
     $startingColumn = "A"
     $startingRow = 5
     $offset = 4
+
+    $name = ""
+    $position = ""
 
     while ($true){
         $cellAddress = "$startingColumn$startingRow"
@@ -245,7 +266,9 @@ function Main{
 
         if ($WorkerTable.ContainsKey($cellValue)) {
         $worker = $WorkerTable[$cellValue]
-        Write-Host "Found: $($worker.Name) - $($worker.Position) at $cellAddress"
+        $name = $worker.Name
+        $position = $worker.Position
+        Write-Host "Found: $($name) - $($position) at $cellAddress"
 
         # TODO: Add Shift Parsing Here
 
@@ -263,6 +286,15 @@ function Main{
     
     # Clean Up
     Close-ExcelPackage $data
+}
+
+# TODO: to test column increment
+function TestColumnIncrementMain{
+    $string = Read-Host "Input a letter to increment"
+
+    $result = Increment-SingleLetter -input $string
+
+    Write-Host "Incremented '$string' to '$result'"
 }
 
 function HashTableCheckMain{
