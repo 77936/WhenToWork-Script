@@ -131,7 +131,7 @@ function Select-ExcelFile {
     }
 }
 
-# Helper function for column incremention
+# Done: Helper function for column incremention
 function ColumnIncrementHelper{
     param(
         [Parameter(Mandatory = $true)]
@@ -149,7 +149,7 @@ function ColumnIncrementHelper{
     }
 }
 
-# Helper function for column translation
+# Done: Helper function for column translation
 function Convert-ColumnLetterToNumber {
     param (
         [Parameter(Mandatory = $true)]
@@ -265,7 +265,7 @@ function Parse-Time-Location {
     return $null
 }
 
-
+# Done: Helper Function to convert letter to number
 function Convert-ColumnLetterToNumber {
     param([string]$colLetter)
 
@@ -344,6 +344,10 @@ function Main{
     Close-ExcelPackage $data
 }
 
+# TODO: Tester
+function TestCellGroupParse{
+
+}
 
 function TestTimeParse{
     $time = Read-Host "Input a time to parse"
@@ -353,10 +357,6 @@ function TestTimeParse{
     Write-Host "Start time = '$($result.StartTime)'"
     Write-Host "End time = '$($result.EndTime)'"
     Write-Host "Category = '$($result.Category)'"
-}
-
-function TestCellGroupParse{
-
 }
 
 function TestColumnIncrementMain{
