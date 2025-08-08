@@ -631,9 +631,75 @@ function Process-ShiftGroup {
     return $result
 }
 
+# TODO: Consolidate Shift Data
 # Create a CSV row that fits the headers
-function CreateCSVRow{
+function CreateCSVRow {
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Worker,
+        
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$ShiftData,
+        
+        [Parameter(Mandatory = $false)]
+        [int]$ShiftNumber = 1  # 1 for Shift1, 2 for Shift2
+    )
     
+    # Determine which shift to process
+    $shift = $null
+    if ($ShiftNumber -eq 1 -and $ShiftData.Shift1) {
+        $shift = $ShiftData.Shift1
+    } elseif ($ShiftNumber -eq 2 -and $ShiftData.Shift2) {
+        $shift = $ShiftData.Shift2
+    } else {
+        # No valid shift found
+        return $null
+    }
+    
+    # Create the CSV row object
+    $csvRow = [PSCustomObject]@{
+        "Employee Name" = $Worker.Name
+        "Position Name" = $Worker.Position
+        "Date" = $ShiftData.Date
+        "Start Time" = $shift.StartTime
+        "End Time" = $shift.EndTime
+        "Duration" = $shift.PaidHours
+        "Category" = $shift.Category
+        "Shift Description" = $ShiftData.Description
+    }
+    
+    return $csvRow
+}
+
+# Helper function to create all CSV rows from shift data
+function CreateAllCSVRows {
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$Worker,
+        
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$ShiftData
+    )
+    
+    $csvRows = @()
+    
+    # Create row for Shift1 if it exists
+    if ($ShiftData.Shift1) {
+        $row1 = CreateCSVRow -Worker $Worker -ShiftData $ShiftData -ShiftNumber 1
+        if ($row1) {
+            $csvRows += $row1
+        }
+    }
+    
+    # Create row for Shift2 if it exists
+    if ($ShiftData.Shift2) {
+        $row2 = CreateCSVRow -Worker $Worker -ShiftData $ShiftData -ShiftNumber 2
+        if ($row2) {
+            $csvRows += $row2
+        }
+    }
+    
+    return $csvRows
 }
 
 
@@ -641,9 +707,10 @@ function CreateCSVRow{
 
 
 
-
 # Main function & Tester Main Functions
-function Main{
+
+ # Main function - Rewritten with better debugging and robust processing
+function Main {
     # Step 1: Check ImportExcel module
     if (-not (Test-ImportExcelModule)) {
         return
@@ -655,59 +722,175 @@ function Main{
         return
     }
     
-    # Open Excel
-    $data = Open-ExcelPackage -Path $excelFile
-    $sheet = $data.Workbook.Worksheets[1] # first sheet
+    try {
+        # Step 3: Open Excel
+        $data = Open-ExcelPackage -Path $excelFile
+        $sheet = $data.Workbook.Worksheets[1] # first sheet
 
-    # Check if names are in the Worker Hashtable
-    $startingNameColumn = "A"
-    $startingNameRow = 5
-    $offset = 4
-
-    $name = ""
-    $position = ""
-
-    while ($true){
-        $cellAddress = "$startingColumn$startingRow"
-        $cellValue = $sheet.Cells[$cellAddress].Text.Trim()
-
-        if ($WorkerTable.ContainsKey($cellValue)) {
-        $worker = $WorkerTable[$cellValue]
-        $name = $worker.Name
-        $position = $worker.Position
-        Write-Host "Found: $($name) - $($position) at $cellAddress"
-
-        # TODO: Add Shift Parsing Here
-
-        # Create an empty array with just headers
-        $csvData = @()
-        $csvData += [PSCustomObject]@{
-            "Employee Name" = ""
-            "Position Name" = ""
-            "Date" = ""
-            "Start Time" = ""
-            "End Time" = ""
-            "Duration" = ""
-            "Category" = ""
-            "Shift Description" = ""
+        # Step 4: Get column date mapping
+        Write-Host "Getting column date mapping..." -ForegroundColor Cyan
+        $columnDateMap = Assign-ColumnDates -Worksheet $sheet
+        if (-not $columnDateMap) {
+            Write-Error "Failed to get column date mapping"
+            Close-ExcelPackage $data
+            return
         }
 
+        # Step 5: Create an array to hold all CSV data
+        $allCsvData = @()
 
+        # Step 6: Define the column sequence for 14 days (C through P)
+        $dayColumns = @("C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P")
 
-        $startingRow += $offset
-    } elseif([string]::IsNullOrWhiteSpace($cellValue)){
-        # Breaks when blank and done with names
-        Write-Host "Blank at $cellAddress. Stopping loop."
-        break
-    }else {
-        # Person not found in hashtable and skipped
-        Write-Host "No match for '$cellValue' at $cellAddress, skipping."
-        $startingRow += $offset
+        # Step 7: Process each worker
+        $startingNameColumn = "A"
+        $startingNameRow = 5
+        $offset = 4
+        $workerCount = 0
+
+        Write-Host "Starting worker processing..." -ForegroundColor Cyan
+
+        while ($true) {
+            $cellAddress = "$startingNameColumn$startingNameRow"
+            $cellValue = $sheet.Cells[$cellAddress].Text.Trim()
+
+            Write-Host "`nChecking cell $cellAddress : '$cellValue'" -ForegroundColor White
+
+            if ($WorkerTable.ContainsKey($cellValue)) {
+                # Found a worker in our hashtable
+                $worker = $WorkerTable[$cellValue]
+                $workerCount++
+                Write-Host "[$workerCount] Processing: $($worker.Name) - $($worker.Position) at row $startingNameRow" -ForegroundColor Green
+
+                $shiftsFoundForWorker = 0
+
+                # Process shifts for each of the 14 days
+                for ($dayIndex = 0; $dayIndex -lt $dayColumns.Length; $dayIndex++) {
+                    $currentColumn = $dayColumns[$dayIndex]
+                    $currentDate = $columnDateMap[$currentColumn]
+                    
+                    Write-Host "  Day $($dayIndex + 1): Column $currentColumn ($currentDate)" -ForegroundColor Yellow
+                    
+                    # Process the 4-cell group for this worker and day
+                    try {
+                        $shiftData = Process-ShiftGroup -Worksheet $sheet -ColumnDateMap $columnDateMap -StartRow $startingNameRow -StartColumn $currentColumn
+                        
+                        # Create CSV rows for any shifts found
+                        if ($shiftData -and ($shiftData.Shift1 -or $shiftData.Shift2)) {
+                            $csvRows = CreateAllCSVRows -Worker $worker -ShiftData $shiftData
+                            
+                            if ($csvRows -and $csvRows.Count -gt 0) {
+                                $allCsvData += $csvRows
+                                $shiftsFoundForWorker += $csvRows.Count
+                                Write-Host "    ✓ Added $($csvRows.Count) shift(s) for $currentDate" -ForegroundColor Green
+                                
+                                # Display shift details for confirmation
+                                foreach ($row in $csvRows) {
+                                    Write-Host "      - $($row.'Start Time') to $($row.'End Time') ($($row.Duration) hrs) [$($row.Category)]" -ForegroundColor Cyan
+                                }
+                            }
+                        } else {
+                            Write-Host "    - No shifts found for $currentDate" -ForegroundColor DarkGray
+                        }
+                    } catch {
+                        Write-Host "    ⚠ Error processing day $($dayIndex + 1): $($_.Exception.Message)" -ForegroundColor Red
+                    }
+                }
+
+                Write-Host "  Total shifts found for $($worker.Name): $shiftsFoundForWorker" -ForegroundColor Magenta
+                $startingNameRow += $offset
+
+            } elseif ([string]::IsNullOrWhiteSpace($cellValue)) {
+                # Blank cell - we've reached the end of workers
+                Write-Host "✓ Blank cell at $cellAddress. Finished processing all workers." -ForegroundColor Cyan
+                Write-Host "Total workers processed: $workerCount" -ForegroundColor Green
+                break
+
+            } else {
+                # Person not found in hashtable - skip this row
+                Write-Host "⚠ No match for '$cellValue' at $cellAddress, skipping to next row." -ForegroundColor Yellow
+                $startingNameRow += $offset
+                
+                # Safety check to prevent infinite loop
+                if ($startingNameRow > 200) {
+                    Write-Host "⚠ Reached row 200, stopping to prevent infinite loop" -ForegroundColor Red
+                    break
+                }
+            }
+        }
+
+        # Step 8: Export to CSV
+        Write-Host "`n=== PROCESSING COMPLETE ===" -ForegroundColor Magenta
+        Write-Host "Total CSV rows collected: $($allCsvData.Count)" -ForegroundColor White
+
+        if ($allCsvData.Count -gt 0) {
+            # Create output filename
+            $outputPath = [System.IO.Path]::ChangeExtension($excelFile, ".csv")
+            
+            # Export all data to CSV
+            $allCsvData | Export-Csv -Path $outputPath -NoTypeInformation
+            
+            # Display summary
+            Write-Host "`n=== EXPORT SUMMARY ===" -ForegroundColor Magenta
+            Write-Host "✓ CSV exported to: $outputPath" -ForegroundColor Green
+            Write-Host "✓ Total shifts exported: $($allCsvData.Count)" -ForegroundColor Cyan
+            
+            # Show breakdown by worker
+            $workerSummary = $allCsvData | Group-Object "Employee Name"
+            Write-Host "`nShifts per worker:" -ForegroundColor Yellow
+            foreach ($worker in $workerSummary) {
+                Write-Host "  $($worker.Name): $($worker.Count) shifts" -ForegroundColor White
+            }
+            
+            # Show date range
+            $dates = $allCsvData | Select-Object -ExpandProperty "Date" | Sort-Object -Unique
+            if ($dates.Count -gt 0) {
+                Write-Host "`nDate range: $($dates[0]) to $($dates[-1])" -ForegroundColor Yellow
+            }
+
+            # Show sample of first few rows
+            Write-Host "`nFirst 3 exported rows:" -ForegroundColor Yellow
+            $allCsvData | Select-Object -First 3 | Format-Table -AutoSize
+
+        } else {
+            Write-Host "`n⚠ No shift data found to export" -ForegroundColor Yellow
+            Write-Host "Debugging information:" -ForegroundColor White
+            Write-Host "  - Workers processed: $workerCount" -ForegroundColor Gray
+            Write-Host "  - Please check:" -ForegroundColor Gray
+            Write-Host "    • Worker names match the hashtable entries exactly" -ForegroundColor Gray
+            Write-Host "    • Shift data is in the expected format" -ForegroundColor Gray
+            Write-Host "    • Date range is properly formatted in cell A2" -ForegroundColor Gray
+            
+            # Show what workers were found
+            if ($workerCount -eq 0) {
+                Write-Host "`nTrying to debug worker detection..." -ForegroundColor Yellow
+                $testRow = 5
+                for ($i = 0; $i -lt 10; $i++) {
+                    $testCell = "A$testRow"
+                    $testValue = $sheet.Cells[$testCell].Text.Trim()
+                    if (-not [string]::IsNullOrWhiteSpace($testValue)) {
+                        $isInTable = $WorkerTable.ContainsKey($testValue)
+                        Write-Host "  Row $testRow ($testCell): '$testValue' - In table: $isInTable" -ForegroundColor Gray
+                    }
+                    $testRow += 4
+                }
+            }
+        }
+
+        # Step 9: Clean up
+        Close-ExcelPackage $data
+
+    } catch {
+        Write-Error "Error in Main function: $($_.Exception.Message)"
+        Write-Host "Stack trace: $($_.ScriptStackTrace)" -ForegroundColor Red
+        
+        # Make sure to clean up even if there's an error
+        if ($data) {
+            Close-ExcelPackage $data
         }
     }
-    
-    # Clean Up
-    Close-ExcelPackage $data
+
+    Write-Host "`nProcessing complete!" -ForegroundColor Green
 }
 
 # Testers
@@ -990,7 +1173,7 @@ function TestCellCheck {
 
 # To run
 try {
-    TestProcessShiftGroup
+    Main
 } catch {
     Write-Error "Unexpected error: $($_.Exception.Message)"
 }
