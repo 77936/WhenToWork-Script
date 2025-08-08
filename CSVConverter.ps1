@@ -208,12 +208,135 @@ function PaidHourCalculator{
     }
 }
 
-# Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
+# Done: Calculate Column Letter to Dates for Shift
+# Function to read date range from A2 and assign dates to columns starting from C
+# Returns hashtable with column letters as keys and dates as values
+function Assign-ColumnDates {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Worksheet
+    )
+    
+    # Read the date range from cell A2
+    $dateRangeText = $Worksheet.Cells["A2"].Text.Trim()
+    
+    if ([string]::IsNullOrWhiteSpace($dateRangeText)) {
+        Write-Error "No date range found in cell A2"
+        return $null
+    }
+    
+    Write-Host "Found date range: $dateRangeText" -ForegroundColor Cyan
+    
+    # Parse the date range (format: "August 2, 2025 - August 15, 2025")
+    $datePattern = '^(.+?)\s*-\s*(.+)$'
+    
+    if ($dateRangeText -match $datePattern) {
+        $startDateText = $matches[1].Trim()
+        $endDateText = $matches[2].Trim()
+        
+        try {
+            # Parse start and end dates
+            $startDate = [DateTime]::Parse($startDateText)
+            $endDate = [DateTime]::Parse($endDateText)
+            
+            Write-Host "Start Date: $($startDate.ToString('MM/dd/yyyy'))" -ForegroundColor Green
+            Write-Host "End Date: $($endDate.ToString('MM/dd/yyyy'))" -ForegroundColor Green
+            
+            # Calculate number of days in the range (should be 14 for 2-week schedule)
+            $totalDays = ($endDate - $startDate).Days + 1
+            Write-Host "Total days in range: $totalDays" -ForegroundColor Yellow
+            
+            # Validate it's a 2-week schedule
+            if ($totalDays -ne 14) {
+                Write-Warning "Expected 14 days for 2-week schedule, but found $totalDays days"
+            }
+            
+            # Create hashtable to store column-date mappings
+            $columnDateMap = @{}
+            
+            # Start from column C
+            $currentColumn = "C"
+            $currentDate = $startDate
+            
+            # Assign dates to columns (C through P for 14 days)
+            for ($day = 0; $day -lt $totalDays -and $day -lt 14; $day++) {
+                $dateString = $currentDate.ToString("MM/dd/yyyy")
+                $columnDateMap[$currentColumn] = $dateString
+                
+                Write-Host "Column $currentColumn = $dateString" -ForegroundColor White
+                
+                # Move to next date and column
+                $currentDate = $currentDate.AddDays(1)
+                
+                # Only increment column if we're not on the last day
+                if ($day -lt ($totalDays - 1) -and $day -lt 13) {
+                    $currentColumn = ColumnIncrementHelper -letter $currentColumn
+                }
+            }
+            
+            Write-Host "Successfully mapped $($columnDateMap.Count) columns to dates" -ForegroundColor Green
+            return $columnDateMap
+            
+        } catch {
+            Write-Error "Failed to parse dates: $($_.Exception.Message)"
+            Write-Host "Expected format: 'August 2, 2025 - August 15, 2025'" -ForegroundColor Yellow
+            return $null
+        }
+        
+    } else {
+        Write-Error "Date range format not recognized. Expected format: 'August 2, 2025 - August 15, 2025'"
+        return $null
+    }
+}
+
+# Done: Function to convert column letter to date using the column-date hashtable
+# Param: Column letter (string), ColumnDateMap (hashtable from Assign-ColumnDates)
+# Returns: Date string in MM/dd/yyyy format, or null if column not found
+function Get-DateFromColumn {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ColumnLetter,
+        
+        [Parameter(Mandatory = $true)]
+        $ColumnDateMap
+    )
+    
+    # Convert to uppercase to ensure consistency
+    $ColumnLetter = $ColumnLetter.ToUpper().Trim()
+    
+    # Try direct lookup first
+    if ($ColumnDateMap.ContainsKey($ColumnLetter)) {
+        return $ColumnDateMap[$ColumnLetter]
+    }
+    
+    # If direct lookup fails, try iterating through keys to find match
+    foreach ($key in $ColumnDateMap.Keys) {
+        $cleanKey = $key.ToString().Trim().ToUpper()
+        if ($cleanKey -eq $ColumnLetter) {
+            return $ColumnDateMap[$key]
+        }
+    }
+    
+    # If still not found, try with string comparison
+    foreach ($key in $ColumnDateMap.Keys) {
+        if ([string]$key -eq $ColumnLetter) {
+            return $ColumnDateMap[$key]
+        }
+    }
+    
+    Write-Warning "Column '$ColumnLetter' not found in date mapping"
+    return $null
+}
+
+# Done: Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
 # Returns StartTime, EndTime, Category
 function Parse-Time-Location {
     param(
         [string]$time
     )
+
+    # Allows for date addition to the shift in a later function
+    $date = $null
 
     $category = $null
     
@@ -235,41 +358,64 @@ function Parse-Time-Location {
     $timePattern = '(\d{1,2}:?\d{0,2}\s*(?:am|pm)?)\s*-\s*(\d{1,2}:?\d{0,2})\s*(am|pm)?'
     
     if ($cleanShift -match $timePattern) {
-        $startTime = $matches[1]
-        $endTime   = $matches[2]
+        $startTime = $matches[1].Trim()
+        $endTime   = $matches[2].Trim()
         $endPeriod = $matches[3]
         
-        # Add missing colons for times without minutes
-        if ($startTime -notmatch ':') { $startTime += ':00' }
-        if ($endTime -notmatch ':')   { $endTime   += ':00' }
+        # Handle AM/PM for start time first (before adding minutes)
+        $startHasAmPm = $startTime -match '(am|pm)$'
+        $startAmPm = ""
+        if ($startHasAmPm) {
+            $startAmPm = $startTime.Substring($startTime.Length - 2)
+            $startTime = $startTime.Substring(0, $startTime.Length - 2)
+        }
         
-        # Handle AM/PM logic
+        # Add missing colons for times without minutes
+        if ($startTime -notmatch ':') { 
+            $startTime = $startTime + ':00'
+        }
+        if ($endTime -notmatch ':') { 
+            $endTime = $endTime + ':00'
+        }
+        
+        # Re-add AM/PM to start time after fixing format
+        if ($startHasAmPm) {
+            $startTime = $startTime + $startAmPm
+        }
+        
+        # Handle AM/PM logic for end time
         if ($endPeriod) {
             $endTime = $endTime + $endPeriod.ToLower()
             
-            if ($endPeriod.ToLower() -eq 'pm' -and $cleanShift -notmatch 'am' -and $startTime -notmatch 'am|pm') {
+            # If end has AM/PM and start doesn't, infer start time AM/PM
+            if (-not $startHasAmPm) {
                 $startHour = [int]($startTime -split ':')[0]
+                if ($endPeriod.ToLower() -eq 'pm' -and $startHour -ge 6 -and $startHour -le 11) {
+                    $startTime += 'am'
+                } elseif ($endPeriod.ToLower() -eq 'pm') {
+                    $startTime += 'pm'
+                } else {
+                    # End is AM
+                    $startTime += 'am'
+                }
+            }
+        } else {
+            # No AM/PM specified for end time — educated guess
+            $startHour = [int]($startTime -split ':')[0]
+            $endHour   = [int]($endTime -split ':')[0]
+
+            # If start time doesn't have AM/PM, decide it first
+            if (-not $startHasAmPm) {
                 if ($startHour -ge 6 -and $startHour -le 11) {
                     $startTime += 'am'
                 } else {
                     $startTime += 'pm'
                 }
             }
-        } else {
-            # No AM/PM specified — educated guess
-            $startHour = [int]($startTime -split ':')[0]
-            $endHour   = [int]($endTime -split ':')[0]
-
-            # Decide AM/PM for start
-            if ($startHour -ge 6 -and $startHour -le 11) {
-                $startTime += 'am'
-            } else {
-                $startTime += 'pm'
-            }
 
             $startPeriod = $startTime.Substring($startTime.Length - 2)
 
-            # Decide AM/PM for end
+            # Decide AM/PM for end based on start
             if ($endHour -lt $startHour) {
                 if ($startHour -eq 12 -and $startPeriod -eq 'pm') {
                     # Special case: noon shift, later end hour is still PM
@@ -299,6 +445,7 @@ function Parse-Time-Location {
 
         
         return @{
+            Date = $date
             StartTime = $startTime
             EndTime   = $endTime
             PaidHours = $paidHours
@@ -310,7 +457,7 @@ function Parse-Time-Location {
     return $null
 }
 
-# Function to parse through shift cell group
+# Done: Function to parse through shift cell group
 # Param $Worksheet, $StartRow, StartColumn
 # Returns $cellsTexts (array of 4 cells)
 function Parse-CellGroup {
@@ -338,14 +485,15 @@ function Parse-CellGroup {
     return $cellTexts
 }
 
-# Add Biweekly Check
-# Function to process shift data from cell group
+# Done: Function to process shift data from cell group
 # Param $Worksheet, $StartRow, $StartColumn
 # Returns PSCustomObject with shift data
 function Process-ShiftGroup {
     param(
         [Parameter(Mandatory = $true)]
         $Worksheet,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$ColumnDateMap,
         
         [Parameter(Mandatory = $true)]
         [int]$StartRow,
@@ -354,6 +502,7 @@ function Process-ShiftGroup {
         [string]$StartColumn
     )
     
+    $date = Get-DateFromColumn -ColumnLetter $StartColumn -ColumnDateMap $ColumnDateMap
     # Get the 4 cell texts
     $cellTexts = Parse-CellGroup -Worksheet $Worksheet -StartRow $StartRow -StartColumn $StartColumn
     
@@ -362,6 +511,7 @@ function Process-ShiftGroup {
         Shift1 = $null
         Shift2 = $null
         Description = ""
+        Date = $date
     }
     
     # Process Cell 1 (always check for shift)
@@ -377,6 +527,31 @@ function Process-ShiftGroup {
         } else {
             # Doesn't start with number - it's a description
             $result.Description = $cellTexts[1]
+            
+            # Check Cell 4 (paid hours) for single shift scenario
+            if (-not [string]::IsNullOrWhiteSpace($cellTexts[3]) -and $cellTexts[3] -match '^\d+\.?\d*$') {
+                $cell4Hours = [double]$cellTexts[3]
+                
+                # If we only have one shift, check pattern
+                if ($result.Shift1 -and -not $result.Shift2) {
+                    $calculatedHours = $result.Shift1.PaidHours
+                    $difference = [Math]::Abs($calculatedHours - $cell4Hours)
+                    
+                    if ($difference -le 0.1) {
+                        # Matches - keep calculated hours
+                        Write-Host "Cell 4 hours match calculated hours, keeping calculated value" -ForegroundColor Green
+                    } elseif ([Math]::Abs($difference - 0.5) -le 0.1) {
+                        # Difference is 0.5 hours (break) - use Cell 4 hours
+                        Write-Host "Cell 4 hours differ by 0.5 (break time), using Cell 4 value: $cell4Hours" -ForegroundColor Yellow
+                        $result.Shift1.PaidHours = $cell4Hours
+                    } else {
+                        # Invalid difference - clear shift due to mistaken parsing
+                        Write-Host "Cell 4 hours ($cell4Hours) don't match expected pattern (diff: $difference), clearing Shift1 due to mistaken parsing" -ForegroundColor Red
+                        $result.Shift1 = $null
+                    }
+                }
+            }
+            
             return $result
         }
     }
@@ -392,15 +567,76 @@ function Process-ShiftGroup {
         }
     }
     
-    Process Cell 4 (paid hours)
-    if (-not [string]::IsNullOrWhiteSpace($cellTexts[3]) -and $cellTexts[3] -match '^\d') {
+    # Process Cell 4 (paid hours validation and correction)
+    if (-not [string]::IsNullOrWhiteSpace($cellTexts[3]) -and $cellTexts[3] -match '^\d+\.?\d*$') {
+        $cell4Hours = [double]$cellTexts[3]
         
-        # Add Biweekly check
-        $result.PaidHours = $cellTexts[3]
+        # Calculate expected total paid hours from shifts
+        $expectedTotal = 0
+        if ($result.Shift1) { $expectedTotal += $result.Shift1.PaidHours }
+        if ($result.Shift2) { $expectedTotal += $result.Shift2.PaidHours }
+        
+        # Check scenarios and update accordingly
+        if ($result.Shift1 -and $result.Shift2) {
+            # Two shifts: Check if Cell 4 matches combined total
+            $difference = [Math]::Abs($expectedTotal - $cell4Hours)
+            
+            if ($difference -le 0.1) {
+                # Matches - keep calculated hours
+                Write-Host "Cell 4 hours match calculated total, keeping calculated values" -ForegroundColor Green
+            } elseif ([Math]::Abs($difference - 0.5) -le 0.1) {
+                # Difference is 0.5 hours (break) - add 0.5 to the longer shift
+                Write-Host "Cell 4 hours differ by 0.5 (break time), adding 0.5 to longer shift" -ForegroundColor Yellow
+                
+                # Find which shift has more paid hours
+                if ($result.Shift1.PaidHours -gt $result.Shift2.PaidHours) {
+                    $result.Shift1.PaidHours += 0.5
+                } elseif ($result.Shift2.PaidHours -gt $result.Shift1.PaidHours) {
+                    $result.Shift2.PaidHours += 0.5
+                } else {
+                    # Equal hours - add to Shift1 by default
+                    $result.Shift1.PaidHours += 0.5
+                }
+            } else {
+                # Invalid difference - clear shifts
+                Write-Host "Cell 4 hours ($cell4Hours) don't match expected pattern, clearing shifts" -ForegroundColor Red
+                $result.Shift1 = $null
+                $result.Shift2 = $null
+                $result.Date = $null
+            }
+        } elseif ($result.Shift1 -and -not $result.Shift2) {
+            # Single shift: Check difference patterns
+            $calculatedHours = $result.Shift1.PaidHours
+            $difference = [Math]::Abs($calculatedHours - $cell4Hours)
+            
+            if ($difference -le 0.1) {
+                # Matches - keep calculated hours
+                Write-Host "Cell 4 hours match calculated hours, keeping calculated value" -ForegroundColor Green
+            } elseif ([Math]::Abs($difference - 0.5) -le 0.1) {
+                # Difference is 0.5 hours (break) - use Cell 4 hours
+                Write-Host "Cell 4 hours differ by 0.5 (break time), using Cell 4 value: $cell4Hours" -ForegroundColor Yellow
+                $result.Shift1.PaidHours = $cell4Hours
+            } else {
+                # Invalid difference - clear shift due to mistaken parsing
+                Write-Host "Cell 4 hours ($cell4Hours) don't match expected pattern (diff: $difference), clearing Shift1 due to mistaken parsing" -ForegroundColor Red
+                $result.Shift1 = $null
+                $result.Date = $null
+            }
+        }
+        
+        # Store the Cell 4 value for reference
+        $result | Add-Member -NotePropertyName "Cell4Hours" -NotePropertyValue $cell4Hours
     }
     
     return $result
 }
+
+# Create a CSV row that fits the headers
+function CreateCSVRow{
+    
+}
+
+
 
 
 
@@ -423,7 +659,7 @@ function Main{
     $data = Open-ExcelPackage -Path $excelFile
     $sheet = $data.Workbook.Worksheets[1] # first sheet
 
-    # Check if namess are in the Worker Hashtable
+    # Check if names are in the Worker Hashtable
     $startingNameColumn = "A"
     $startingNameRow = 5
     $offset = 4
@@ -442,6 +678,19 @@ function Main{
         Write-Host "Found: $($name) - $($position) at $cellAddress"
 
         # TODO: Add Shift Parsing Here
+
+        # Create an empty array with just headers
+        $csvData = @()
+        $csvData += [PSCustomObject]@{
+            "Employee Name" = ""
+            "Position Name" = ""
+            "Date" = ""
+            "Start Time" = ""
+            "End Time" = ""
+            "Duration" = ""
+            "Category" = ""
+            "Shift Description" = ""
+        }
 
 
 
@@ -462,6 +711,48 @@ function Main{
 }
 
 # Testers
+
+# Test function for Assign-ColumnDates
+function TestAssignColumnDates {
+    # Step 1: Check ImportExcel module
+    if (-not (Test-ImportExcelModule)) {
+        return
+    }
+
+    # Step 2: Let user select Excel file
+    $excelFile = Select-ExcelFile
+    if (-not $excelFile) {
+        return
+    }
+
+    try {
+        # Step 3: Open Excel and get worksheet
+        $data = Open-ExcelPackage -Path $excelFile
+        $sheet = $data.Workbook.Worksheets[1]  # first sheet
+
+        # Step 4: Test the column date assignment
+        Write-Host "`nTesting column date assignment..." -ForegroundColor Cyan
+        $columnDates = Assign-ColumnDates -Worksheet $sheet
+
+        if ($columnDates) {
+            Write-Host "`n=== Column Date Mapping ===" -ForegroundColor Magenta
+            foreach ($column in ($columnDates.Keys | Sort-Object)) {
+                Write-Host "$column : $($columnDates[$column])"
+            }
+            
+            # Show example of how to use the mapping
+            Write-Host "`n=== Usage Example ===" -ForegroundColor Cyan
+            Write-Host "To get the date for column D: $($columnDates['D'])"
+            Write-Host "To check if column E exists: $($columnDates.ContainsKey('E'))"
+        }
+
+        # Cleanup
+        Close-ExcelPackage $data
+    }
+    catch {
+        Write-Error "Failed to test column date assignment: $_"
+    }
+}
 
 function TestProcessShiftGroup {
     # Step 1: Check ImportExcel module
@@ -506,8 +797,11 @@ function TestProcessShiftGroup {
             Write-Host "$cellAddress : '$($cellTexts[$i])'"
         }
         
+        $ColumnDateMap = Assign-ColumnDates -Worksheet $sheet 
+        Write-Host "$startColumn : '$($startColumn)'"
+
         # Then process the shift data
-        $shiftResult = Process-ShiftGroup -Worksheet $sheet -StartRow $startRow -StartColumn $startColumn
+        $shiftResult = Process-ShiftGroup -Worksheet $sheet -ColumnDateMap $ColumnDateMap -StartRow $startRow -StartColumn $startColumn
 
         Write-Host "`n=== Processed Shift Data ===" -ForegroundColor Green
         
@@ -516,6 +810,7 @@ function TestProcessShiftGroup {
             Write-Host "  Start: $($shiftResult.Shift1.StartTime)"
             Write-Host "  End: $($shiftResult.Shift1.EndTime)"
             Write-Host "  Category: $($shiftResult.Shift1.Category)"
+            Write-Host "  Paid Hours: $($shiftResult.Shift1.PaidHours)"
         } else {
             Write-Host "Shift 1: None"
         }
@@ -525,12 +820,13 @@ function TestProcessShiftGroup {
             Write-Host "  Start: $($shiftResult.Shift2.StartTime)"
             Write-Host "  End: $($shiftResult.Shift2.EndTime)"
             Write-Host "  Category: $($shiftResult.Shift2.Category)"
+            Write-Host "  Paid Hours: $($shiftResult.Shift2.PaidHours)"
         } else {
             Write-Host "Shift 2: None"
         }
         
+        Write-Host "Date: '$($shiftResult.Date)'"
         Write-Host "Description: '$($shiftResult.Description)'"
-        Write-Host "Paid Hours: '$($shiftResult.PaidHours)'"
 
         # Cleanup
         Close-ExcelPackage $data
@@ -694,7 +990,7 @@ function TestCellCheck {
 
 # To run
 try {
-    TestTimeParse
+    TestProcessShiftGroup
 } catch {
     Write-Error "Unexpected error: $($_.Exception.Message)"
 }
