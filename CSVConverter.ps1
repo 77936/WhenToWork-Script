@@ -1,4 +1,4 @@
-﻿# Done: Employee Hashtable Biweekly Names -> WhenToWork Names + Positions
+﻿# Employee Hashtable Biweekly Names -> WhenToWork Names + Positions
 $WorkerTable = @{
    "Nicole Shaw" = [PSCustomObject]@{
         Name = "Nicole Shaw"
@@ -86,7 +86,7 @@ $WorkerTable = @{
     }
 }
 
-# Done: Check if ImportExcel module is available
+# Check if ImportExcel module is available
 function Test-ImportExcelModule {
     if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
         Write-Host "ImportExcel module not found. Installing..." -ForegroundColor Yellow
@@ -104,7 +104,7 @@ function Test-ImportExcelModule {
     return $true
 }
 
-# Done: Function to open file dialog and select Excel file
+# Function to open file dialog and select Excel file
 function Select-ExcelFile {
     param(
         [string]$Title = "Select Excel File",
@@ -131,7 +131,38 @@ function Select-ExcelFile {
     }
 }
 
-# Done: Helper function for column incremention
+# Function to open save file dialog and select where to save CSV
+function Select-SaveLocation {
+    param(
+        [string]$Title = "Save CSV File As",
+        [string]$InitialDirectory = [Environment]::GetFolderPath("Desktop"),
+        [string]$DefaultFileName = "schedule_export.csv"
+    )
+    
+    Add-Type -AssemblyName System.Windows.Forms
+    
+    $saveDialog = New-Object System.Windows.Forms.SaveFileDialog
+    $saveDialog.Title = $Title
+    $saveDialog.InitialDirectory = $InitialDirectory
+    $saveDialog.Filter = "CSV Files (*.csv)|*.csv|All Files (*.*)|*.*"
+    $saveDialog.FilterIndex = 1
+    $saveDialog.DefaultExt = "csv"
+    $saveDialog.AddExtension = $true
+    $saveDialog.FileName = $DefaultFileName
+    $saveDialog.OverwritePrompt = $true
+    
+    $result = $saveDialog.ShowDialog()
+    
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+        return $saveDialog.FileName
+    }
+    else {
+        Write-Host "No save location selected." -ForegroundColor Yellow
+        return $null
+    }
+}
+
+# Helper function for column incremention
 function ColumnIncrementHelper{
     param(
         [Parameter(Mandatory = $true)]
@@ -149,7 +180,7 @@ function ColumnIncrementHelper{
     }
 }
 
-# Done: Calculate Paid Hours
+# Calculate Paid Hours
 # returns $paidHours
 function PaidHourCalculator{
     param(
@@ -208,7 +239,7 @@ function PaidHourCalculator{
     }
 }
 
-# Done: Calculate Column Letter to Dates for Shift
+# Calculate Column Letter to Dates for Shift
 # Function to read date range from A2 and assign dates to columns starting from C
 # Returns hashtable with column letters as keys and dates as values
 function Assign-ColumnDates {
@@ -289,7 +320,7 @@ function Assign-ColumnDates {
     }
 }
 
-# Done: Function to convert column letter to date using the column-date hashtable
+# Function to convert column letter to date using the column-date hashtable
 # Param: Column letter (string), ColumnDateMap (hashtable from Assign-ColumnDates)
 # Returns: Date string in MM/dd/yyyy format, or null if column not found
 function Get-DateFromColumn {
@@ -328,7 +359,7 @@ function Get-DateFromColumn {
     return $null
 }
 
-# Done: Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
+# Function to parse time shifts for schedule mode *ADD LOCATION CODES TO "Category" Header*
 # Returns StartTime, EndTime, Category
 function Parse-Time-Location {
     param(
@@ -457,7 +488,7 @@ function Parse-Time-Location {
     return $null
 }
 
-# Done: Function to parse through shift cell group
+# Function to parse through shift cell group
 # Param $Worksheet, $StartRow, StartColumn
 # Returns $cellsTexts (array of 4 cells)
 function Parse-CellGroup {
@@ -485,7 +516,7 @@ function Parse-CellGroup {
     return $cellTexts
 }
 
-# Done: Function to process shift data from cell group
+# Function to process shift data from cell group
 # Param $Worksheet, $StartRow, $StartColumn
 # Returns PSCustomObject with shift data
 function Process-ShiftGroup {
@@ -631,8 +662,8 @@ function Process-ShiftGroup {
     return $result
 }
 
-# TODO: Consolidate Shift Data
-# Create a CSV row that fits the headers
+# Consolidate Shift Data
+# Fixed CreateCSVRow function
 function CreateCSVRow {
     param(
         [Parameter(Mandatory = $true)]
@@ -653,8 +684,11 @@ function CreateCSVRow {
         $shift = $ShiftData.Shift2
     } else {
         # No valid shift found
+        Write-Host "    DEBUG: No shift found for ShiftNumber $ShiftNumber" -ForegroundColor DarkGray
         return $null
     }
+    
+    Write-Host "    DEBUG: Creating CSV row for shift $ShiftNumber - $($shift.StartTime) to $($shift.EndTime)" -ForegroundColor DarkCyan
     
     # Create the CSV row object
     $csvRow = [PSCustomObject]@{
@@ -671,7 +705,7 @@ function CreateCSVRow {
     return $csvRow
 }
 
-# Helper function to create all CSV rows from shift data
+# Fixed CreateAllCSVRows function with better debugging
 function CreateAllCSVRows {
     param(
         [Parameter(Mandatory = $true)]
@@ -683,21 +717,35 @@ function CreateAllCSVRows {
     
     $csvRows = @()
     
+    Write-Host "    DEBUG: Processing shifts for $($Worker.Name) on $($ShiftData.Date)" -ForegroundColor DarkYellow
+    Write-Host "    DEBUG: Shift1 exists: $($null -ne $ShiftData.Shift1)" -ForegroundColor DarkYellow
+    Write-Host "    DEBUG: Shift2 exists: $($null -ne $ShiftData.Shift2)" -ForegroundColor DarkYellow
+    
     # Create row for Shift1 if it exists
     if ($ShiftData.Shift1) {
+        Write-Host "    DEBUG: Creating row for Shift1" -ForegroundColor DarkCyan
         $row1 = CreateCSVRow -Worker $Worker -ShiftData $ShiftData -ShiftNumber 1
         if ($row1) {
             $csvRows += $row1
+            Write-Host "    DEBUG: Successfully created Shift1 row" -ForegroundColor Green
+        } else {
+            Write-Host "    DEBUG: Failed to create Shift1 row" -ForegroundColor Red
         }
     }
     
     # Create row for Shift2 if it exists
     if ($ShiftData.Shift2) {
+        Write-Host "    DEBUG: Creating row for Shift2" -ForegroundColor DarkCyan
         $row2 = CreateCSVRow -Worker $Worker -ShiftData $ShiftData -ShiftNumber 2
         if ($row2) {
             $csvRows += $row2
+            Write-Host "    DEBUG: Successfully created Shift2 row" -ForegroundColor Green
+        } else {
+            Write-Host "    DEBUG: Failed to create Shift2 row" -ForegroundColor Red
         }
     }
+    
+    Write-Host "    DEBUG: Total CSV rows created: $($csvRows.Count)" -ForegroundColor Magenta
     
     return $csvRows
 }
@@ -707,9 +755,11 @@ function CreateAllCSVRows {
 
 
 
+
+
 # Main function & Tester Main Functions
 
- # Main function - Rewritten with better debugging and robust processing
+# Main function - Rewritten with better debugging and robust processing
 function Main {
     # Step 1: Check ImportExcel module
     if (-not (Test-ImportExcelModule)) {
@@ -768,26 +818,42 @@ function Main {
                 for ($dayIndex = 0; $dayIndex -lt $dayColumns.Length; $dayIndex++) {
                     $currentColumn = $dayColumns[$dayIndex]
                     $currentDate = $columnDateMap[$currentColumn]
-                    
+    
                     Write-Host "  Day $($dayIndex + 1): Column $currentColumn ($currentDate)" -ForegroundColor Yellow
-                    
+    
                     # Process the 4-cell group for this worker and day
                     try {
                         $shiftData = Process-ShiftGroup -Worksheet $sheet -ColumnDateMap $columnDateMap -StartRow $startingNameRow -StartColumn $currentColumn
-                        
+        
                         # Create CSV rows for any shifts found
                         if ($shiftData -and ($shiftData.Shift1 -or $shiftData.Shift2)) {
                             $csvRows = CreateAllCSVRows -Worker $worker -ShiftData $shiftData
-                            
-                            if ($csvRows -and $csvRows.Count -gt 0) {
-                                $allCsvData += $csvRows
-                                $shiftsFoundForWorker += $csvRows.Count
-                                Write-Host "    ✓ Added $($csvRows.Count) shift(s) for $currentDate" -ForegroundColor Green
-                                
-                                # Display shift details for confirmation
-                                foreach ($row in $csvRows) {
-                                    Write-Host "      - $($row.'Start Time') to $($row.'End Time') ($($row.Duration) hrs) [$($row.Category)]" -ForegroundColor Cyan
+            
+                            # FIXED: Force $csvRows to be treated as an array and check properly
+                            if ($csvRows) {
+                                # Convert to array to handle single-item case
+                                $csvRowsArray = @($csvRows)
+                                $rowCount = $csvRowsArray.Count
+                
+                                Write-Host "    DEBUG: csvRows type: $($csvRows.GetType().Name)" -ForegroundColor DarkMagenta
+                                Write-Host "    DEBUG: csvRows count check: Count property = $($csvRows.Count), Array length = $rowCount" -ForegroundColor DarkMagenta
+                
+                                if ($rowCount -gt 0) {
+                                    # Add to main collection
+                                    $allCsvData += $csvRowsArray
+                                    $shiftsFoundForWorker += $rowCount
+                    
+                                    Write-Host "    ✓ Added $rowCount shift(s) for $currentDate" -ForegroundColor Green
+                    
+                                    # Display shift details for confirmation
+                                    foreach ($row in $csvRowsArray) {
+                                        Write-Host "      - $($row.'Start Time') to $($row.'End Time') ($($row.Duration) hrs) [$($row.Category)]" -ForegroundColor Cyan
+                                    }
+                                } else {
+                                    Write-Host "    ⚠ csvRows exists but count is 0" -ForegroundColor Red
                                 }
+                            } else {
+                                Write-Host "    ⚠ No csvRows returned from CreateAllCSVRows" -ForegroundColor Red
                             }
                         } else {
                             Write-Host "    - No shifts found for $currentDate" -ForegroundColor DarkGray
@@ -824,33 +890,52 @@ function Main {
         Write-Host "Total CSV rows collected: $($allCsvData.Count)" -ForegroundColor White
 
         if ($allCsvData.Count -gt 0) {
-            # Create output filename
-            $outputPath = [System.IO.Path]::ChangeExtension($excelFile, ".csv")
+            # Let user choose where to save the file
+            Write-Host "`nChoose where to save the CSV file..." -ForegroundColor Cyan
+    
+            # Create a default filename based on the Excel file name and current date
+            $excelBaseName = [System.IO.Path]::GetFileNameWithoutExtension($excelFile)
+            $currentDate = Get-Date -Format "yyyy-MM-dd"
+            $defaultFileName = "${excelBaseName}_schedule_export_${currentDate}.csv"
+    
+            # Get the directory of the original Excel file as initial directory
+            $excelDirectory = [System.IO.Path]::GetDirectoryName($excelFile)
+    
+            $outputPath = Select-SaveLocation -DefaultFileName $defaultFileName -InitialDirectory $excelDirectory
+    
+            if ($outputPath) {
+                try {
+                    # Export all data to CSV
+                    $allCsvData | Export-Csv -Path $outputPath -NoTypeInformation
             
-            # Export all data to CSV
-            $allCsvData | Export-Csv -Path $outputPath -NoTypeInformation
+                    # Display summary
+                    Write-Host "`n=== EXPORT SUMMARY ===" -ForegroundColor Magenta
+                    Write-Host "✓ CSV exported to: $outputPath" -ForegroundColor Green
+                    Write-Host "✓ Total shifts exported: $($allCsvData.Count)" -ForegroundColor Cyan
             
-            # Display summary
-            Write-Host "`n=== EXPORT SUMMARY ===" -ForegroundColor Magenta
-            Write-Host "✓ CSV exported to: $outputPath" -ForegroundColor Green
-            Write-Host "✓ Total shifts exported: $($allCsvData.Count)" -ForegroundColor Cyan
+                    # Show breakdown by worker
+                    $workerSummary = $allCsvData | Group-Object "Employee Name"
+                    Write-Host "`nShifts per worker:" -ForegroundColor Yellow
+                    foreach ($worker in $workerSummary) {
+                        Write-Host "  $($worker.Name): $($worker.Count) shifts" -ForegroundColor White
+                    }
             
-            # Show breakdown by worker
-            $workerSummary = $allCsvData | Group-Object "Employee Name"
-            Write-Host "`nShifts per worker:" -ForegroundColor Yellow
-            foreach ($worker in $workerSummary) {
-                Write-Host "  $($worker.Name): $($worker.Count) shifts" -ForegroundColor White
-            }
-            
-            # Show date range
-            $dates = $allCsvData | Select-Object -ExpandProperty "Date" | Sort-Object -Unique
-            if ($dates.Count -gt 0) {
-                Write-Host "`nDate range: $($dates[0]) to $($dates[-1])" -ForegroundColor Yellow
-            }
+                    # Show date range
+                    $dates = $allCsvData | Select-Object -ExpandProperty "Date" | Sort-Object -Unique
+                    if ($dates.Count -gt 0) {
+                        Write-Host "`nDate range: $($dates[0]) to $($dates[-1])" -ForegroundColor Yellow
+                    }
 
-            # Show sample of first few rows
-            Write-Host "`nFirst 3 exported rows:" -ForegroundColor Yellow
-            $allCsvData | Select-Object -First 3 | Format-Table -AutoSize
+                    # Show sample of first few rows
+                    Write-Host "`nFirst 3 exported rows:" -ForegroundColor Yellow
+                    $allCsvData | Select-Object -First 3 | Format-Table -AutoSize
+
+                } catch {
+                    Write-Error "Failed to export CSV: $($_.Exception.Message)"
+                }
+            } else {
+                Write-Host "Export cancelled by user." -ForegroundColor Yellow
+            }
 
         } else {
             Write-Host "`n⚠ No shift data found to export" -ForegroundColor Yellow
@@ -860,7 +945,7 @@ function Main {
             Write-Host "    • Worker names match the hashtable entries exactly" -ForegroundColor Gray
             Write-Host "    • Shift data is in the expected format" -ForegroundColor Gray
             Write-Host "    • Date range is properly formatted in cell A2" -ForegroundColor Gray
-            
+    
             # Show what workers were found
             if ($workerCount -eq 0) {
                 Write-Host "`nTrying to debug worker detection..." -ForegroundColor Yellow
@@ -895,7 +980,6 @@ function Main {
 
 # Testers
 
-# Test function for Assign-ColumnDates
 function TestAssignColumnDates {
     # Step 1: Check ImportExcel module
     if (-not (Test-ImportExcelModule)) {
